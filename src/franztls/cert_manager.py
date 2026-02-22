@@ -29,7 +29,6 @@ class ReusableHTTPServer(HTTPServer):
 class CertManager:
     def __init__(
         self,
-        service_id: str,
         domain: str,
         acme_directory: Optional[str] = "https://ca.localhost:9000/acme/acme/directory",
         ca_file: Optional[str] = "/etc/certs/ca.crt",
@@ -39,7 +38,6 @@ class CertManager:
         cert_path: Optional[str] = "/etc/certs/domain.pem",
         renewal_buffer_hours: int = 24
     ) -> None:
-        self.service_id = service_id
         self.domain = domain
         self.acme_directory = acme_directory
         self.ca_file = ca_file
