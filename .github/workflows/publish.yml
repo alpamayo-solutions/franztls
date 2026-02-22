@@ -2,12 +2,14 @@ name: Build & Publish
 
 on:
   push:
-    tags: 
+    tags:
         - 'v*'
 
 jobs:
   build-publish:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -26,8 +28,5 @@ jobs:
       - name: Check the built package
         run: twine check dist/*
 
-      - name: Publish to TestPyPI
+      - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
