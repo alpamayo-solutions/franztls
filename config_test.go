@@ -266,6 +266,26 @@ func TestConfigNormalization(t *testing.T) {
 	}
 }
 
+func TestConfigAllowsCACertificateInDifferentParent(t *testing.T) {
+	root := t.TempDir()
+	stateRoot := filepath.Join(root, "state")
+	caRoot := filepath.Join(root, "trust")
+	cfg := validConfig(stateRoot)
+	cfg.CACertFile = filepath.Join(caRoot, "prekit-ca.crt")
+
+	if filepath.Dir(cfg.CACertFile) == filepath.Dir(cfg.AccountKeyFile) {
+		t.Fatal("test setup placed CA and writable state in the same parent")
+	}
+
+	manager, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if got := manager.cfg.CACertFile; got != cfg.CACertFile {
+		t.Fatalf("CACertFile = %q, want %q", got, cfg.CACertFile)
+	}
+}
+
 func TestNewPerformsNoIO(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "absent")
 	manager, err := New(validConfig(root))
