@@ -1,0 +1,4 @@
+github.com/go-acme/lego/v5 v5.2.2 h1:KqFas/Ak2QDdU+Qm7MO9OEnS35zC000kPmM+5tLdZKk=
+github.com/go-acme/lego/v5 v5.2.2/go.mod h1:H/hb7OJKmpVGa8zypgZh0ys5P4VUu++ZNgAEcOwq+OI=
+golang.org/x/sys v0.44.0 h1:ildZl3J4uzeKP07r2F++Op7E9B29JRUy+a27EibtBTQ=
+golang.org/x/sys v0.44.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
