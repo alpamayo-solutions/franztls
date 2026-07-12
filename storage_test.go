@@ -2,6 +2,7 @@ package franztls
 
 import (
 	"bytes"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
@@ -362,6 +363,169 @@ func TestGeneratedRSAKeyIs2048BitPKCS1PEM(t *testing.T) {
 	}
 	if !publicKeysEqual(key.Public(), parsed.Public()) {
 		t.Fatal("generated key changed during PKCS#1 round trip")
+	}
+}
+
+func TestAccountStateGeneratesMissingRSA2048PKCS1KeyWithoutWriting(t *testing.T) {
+	cfg := validConfig(storageTempDir(t))
+	state, err := newStateStore(cfg).loadAccountState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, ok := state.accountKey.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("account key = %T, want *rsa.PrivateKey", state.accountKey)
+	}
+	if key.N.BitLen() != 2048 {
+		t.Fatalf("RSA bits = %d, want 2048", key.N.BitLen())
+	}
+	block, rest := decodeSinglePEMForTest(t, state.accountKeyPEM)
+	if block.Type != "RSA PRIVATE KEY" || len(rest) != 0 {
+		t.Fatalf("account key PEM type/rest = %q/%q", block.Type, rest)
+	}
+	if _, err := x509.ParsePKCS1PrivateKey(block.Bytes); err != nil {
+		t.Fatalf("parse generated PKCS#1 account key: %v", err)
+	}
+	if state.accountKeyExisted {
+		t.Fatal("generated account key marked as existing")
+	}
+	if state.account != nil {
+		t.Fatalf("generated account state unexpectedly loaded account: %+v", state.account)
+	}
+	if _, err := os.Stat(cfg.AccountKeyFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("read-only account preparation wrote key: %v", err)
+	}
+}
+
+func TestAccountStateReusesExistingRSAKeyByteForByte(t *testing.T) {
+	cfg := validConfig(storageTempDir(t))
+	key := newTestRSAAccountKey(t)
+	encoded := encodeTestPrivateKey(t, key, testKeyPKCS1)
+	store := newStateStore(cfg)
+	if err := store.writeFile(cfg.AccountKeyFile, encoded, 0o600, "account_key"); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.loadAccountState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.accountKeyExisted {
+		t.Fatal("existing account key marked as generated")
+	}
+	if !bytes.Equal(state.accountKeyPEM, encoded) {
+		t.Fatal("existing account key encoding changed")
+	}
+	if !publicKeysEqual(state.accountKey.Public(), key.Public()) {
+		t.Fatal("existing account key changed while loading")
+	}
+	assertFileBytesAndMode(t, cfg.AccountKeyFile, encoded, 0o600)
+}
+
+func TestAccountStateLoadsExistingAccountAndAllowsKeyRecovery(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		writeRecord bool
+	}{
+		{name: "existing account", writeRecord: true},
+		{name: "missing account recovered later", writeRecord: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := validConfig(storageTempDir(t))
+			store := newStateStore(cfg)
+			keyPEM := encodeTestPrivateKey(t, newTestRSAAccountKey(t), testKeyPKCS1)
+			if err := store.writeFile(cfg.AccountKeyFile, keyPEM, 0o600, "account_key"); err != nil {
+				t.Fatal(err)
+			}
+			account := testACMEAccount("https://ca.test/acme/account/storage")
+			if test.writeRecord {
+				if err := store.persistAccount(account); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			state, err := store.loadAccountState()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.writeRecord {
+				if state.account == nil || state.account.Location != account.Location {
+					t.Fatalf("loaded account = %+v, want location %q", state.account, account.Location)
+				}
+				assertPersistedAccount(t, cfg, account)
+			} else if state.account != nil {
+				t.Fatalf("missing account file loaded account: %+v", state.account)
+			}
+		})
+	}
+}
+
+func TestAccountStateCorruptionNeverCreatesReplacementIdentity(t *testing.T) {
+	validKey := encodeTestPrivateKey(t, newTestRSAAccountKey(t), testKeyPKCS1)
+	validAccount := testACMEAccount("https://ca.test/acme/account/valid")
+	tests := []struct {
+		name      string
+		prepare   func(*testing.T, Config, *stateStore)
+		wantKind  string
+		unchanged func(*testing.T, Config)
+	}{
+		{
+			name: "corrupt account key",
+			prepare: func(t *testing.T, cfg Config, store *stateStore) {
+				t.Helper()
+				if err := store.writeFile(cfg.AccountKeyFile, []byte("corrupt-private-key"), 0o600, "account_key"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantKind: "account_key",
+			unchanged: func(t *testing.T, cfg Config) {
+				assertFileBytesAndMode(t, cfg.AccountKeyFile, []byte("corrupt-private-key"), 0o600)
+			},
+		},
+		{
+			name: "corrupt account JSON",
+			prepare: func(t *testing.T, cfg Config, store *stateStore) {
+				t.Helper()
+				if err := store.writeFile(cfg.AccountKeyFile, validKey, 0o600, "account_key"); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.writeFile(cfg.AccountFile, []byte("not-json "+acmeSecretAccount), 0o600, "account"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantKind: "account",
+			unchanged: func(t *testing.T, cfg Config) {
+				assertFileBytesAndMode(t, cfg.AccountKeyFile, validKey, 0o600)
+				assertFileBytesAndMode(t, cfg.AccountFile, []byte("not-json "+acmeSecretAccount), 0o600)
+			},
+		},
+		{
+			name: "account JSON without matching key",
+			prepare: func(t *testing.T, _ Config, store *stateStore) {
+				t.Helper()
+				if err := store.persistAccount(validAccount); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantKind: "account_state",
+			unchanged: func(t *testing.T, cfg Config) {
+				assertPersistedAccount(t, cfg, validAccount)
+				if _, err := os.Stat(cfg.AccountKeyFile); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("replacement account key was created: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := validConfig(storageTempDir(t))
+			store := newStateStore(cfg)
+			test.prepare(t, cfg, store)
+			_, err := store.loadAccountState()
+			assertStateErrorKind(t, err, test.wantKind)
+			test.unchanged(t, cfg)
+		})
 	}
 }
 

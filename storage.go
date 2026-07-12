@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -13,12 +14,15 @@ import (
 	"io/fs"
 	"path/filepath"
 	"time"
+
+	"github.com/go-acme/lego/v5/acme"
 )
 
 var (
 	errUnsafeStatePath = errors.New("franztls: unsafe state path")
 	errNotRegularFile  = errors.New("franztls: state path is not a regular file")
 	errWrongMode       = errors.New("franztls: state path has unexpected permissions")
+	errAccountState    = errors.New("franztls: inconsistent account state")
 )
 
 // DurabilityUncertainError means rename completed but syncing the containing
@@ -190,8 +194,96 @@ type stateStore struct {
 	stateRoot string
 }
 
+type accountState struct {
+	accountKey        crypto.Signer
+	accountKeyPEM     []byte
+	accountKeyExisted bool
+	account           *acme.ExtendedAccount
+}
+
 func newStateStore(cfg Config) *stateStore {
 	return &stateStore{cfg: cfg, stateRoot: filepath.Dir(cfg.AccountKeyFile)}
+}
+
+func (s *stateStore) loadAccountState() (accountState, error) {
+	keyPEM, keyErr := s.readFile(s.cfg.AccountKeyFile, 0o600, "account_key")
+	accountJSON, accountErr := s.readFile(s.cfg.AccountFile, 0o600, "account")
+	keyMissing := errors.Is(keyErr, fs.ErrNotExist)
+	accountMissing := errors.Is(accountErr, fs.ErrNotExist)
+
+	if keyErr != nil && !keyMissing {
+		return accountState{}, keyErr
+	}
+	if accountErr != nil && !accountMissing {
+		return accountState{}, accountErr
+	}
+	if keyMissing {
+		if !accountMissing {
+			return accountState{}, &StateError{
+				Path: s.cfg.AccountFile,
+				Kind: "account_state",
+				Err:  errAccountState,
+			}
+		}
+		key, encoded, err := generateRSAKeyPEM()
+		if err != nil {
+			return accountState{}, &StateError{
+				Path: s.cfg.AccountKeyFile,
+				Kind: "account_key",
+				Err:  err,
+			}
+		}
+		return accountState{accountKey: key, accountKeyPEM: encoded}, nil
+	}
+
+	signer, err := parsePrivateKey(keyPEM)
+	if err != nil {
+		return accountState{}, &StateError{
+			Path: s.cfg.AccountKeyFile,
+			Kind: "account_key",
+			Err:  err,
+		}
+	}
+	if _, ok := signer.(*rsa.PrivateKey); !ok {
+		return accountState{}, &StateError{
+			Path: s.cfg.AccountKeyFile,
+			Kind: "account_key",
+			Err:  errAccountState,
+		}
+	}
+	state := accountState{
+		accountKey:        signer,
+		accountKeyPEM:     keyPEM,
+		accountKeyExisted: true,
+	}
+	if accountMissing {
+		return state, nil
+	}
+	var account acme.ExtendedAccount
+	if err := json.Unmarshal(accountJSON, &account); err != nil || account.Location == "" {
+		return accountState{}, &StateError{
+			Path: s.cfg.AccountFile,
+			Kind: "account",
+			Err:  errAccountState,
+		}
+	}
+	state.account = &account
+	return state, nil
+}
+
+func (s *stateStore) persistAccount(account *acme.ExtendedAccount) error {
+	if account == nil || account.Location == "" {
+		return &StateError{
+			Path: s.cfg.AccountFile,
+			Kind: "account",
+			Err:  errAccountState,
+		}
+	}
+	encoded, err := json.Marshal(account)
+	if err != nil {
+		return &StateError{Path: s.cfg.AccountFile, Kind: "account", Err: err}
+	}
+	return s.writeFile(s.cfg.AccountFile, encoded, 0o600, "account")
 }
 
 func (s *stateStore) writeFile(path string, data []byte, mode fs.FileMode, kind string) error {
