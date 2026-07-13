@@ -1,0 +1,164 @@
+name: franztls-integration
+
+x-go-client: &go-client
+  image: franztls-integration:test
+  build:
+    context: ..
+    dockerfile: integration/Dockerfile
+  user: "65532:65532"
+  cap_add:
+    - NET_BIND_SERVICE
+
+x-python-client: &python-client
+  image: franztls-python-integration:test
+  build:
+    context: ..
+    dockerfile: integration/Python.Dockerfile
+  user: "65532:65532"
+  cap_add:
+    - NET_BIND_SERVICE
+
+services:
+  ca:
+    image: smallstep/step-ca:0.30.2
+    environment:
+      DOCKER_STEPCA_INIT_NAME: franztls-test
+      DOCKER_STEPCA_INIT_DNS_NAMES: ca
+      DOCKER_STEPCA_INIT_ACME: "true"
+      DOCKER_STEPCA_INIT_PASSWORD_FILE: /run/secrets/step-password
+    entrypoint:
+      - /bin/bash
+      - -ec
+    command:
+      - |
+        if [ ! -f /home/step/config/ca.json ]; then
+          /bin/bash /entrypoint.sh true >/dev/null
+        fi
+        exec /bin/bash /entrypoint.sh /usr/local/bin/step-ca \
+          --password-file /home/step/secrets/password \
+          /home/step/config/ca.json
+    volumes:
+      - ca-state:/home/step
+      - type: bind
+        source: ./.runtime/step-password
+        target: /run/secrets/step-password
+        read_only: true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - step ca health --ca-url https://ca:9000 --root /home/step/certs/root_ca.crt 2>/dev/null | grep -qx ok
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 2s
+
+  server-cert:
+    image: smallstep/step-ca:0.30.2
+    user: "0:0"
+    entrypoint:
+      - /bin/bash
+      - -ec
+    command:
+      - |
+        step ca certificate mtls-server /runtime/server.pem /runtime/server.key \
+          --san mtls-server \
+          --provisioner admin \
+          --provisioner-password-file /run/secrets/step-password \
+          --ca-url https://ca:9000 \
+          --root /home/step/certs/root_ca.crt
+        chown 65532:65532 /runtime/server.pem /runtime/server.key
+        chmod 0644 /runtime/server.pem
+        chmod 0600 /runtime/server.key
+    depends_on:
+      ca:
+        condition: service_healthy
+    volumes:
+      - ca-state:/home/step:ro
+      - ./.runtime:/runtime
+      - type: bind
+        source: ./.runtime/step-password
+        target: /run/secrets/step-password
+        read_only: true
+
+  mtls-server:
+    image: franztls-integration:test
+    build:
+      context: ..
+      dockerfile: integration/Dockerfile
+    user: "65532:65532"
+    command:
+      - serve-mtls
+    volumes:
+      - type: bind
+        source: ./.runtime/server.pem
+        target: /runtime/server.pem
+        read_only: true
+      - type: bind
+        source: ./.runtime/server.key
+        target: /runtime/server.key
+        read_only: true
+      - type: bind
+        source: ./.runtime/root_ca.crt
+        target: /etc/certs/prekit-ca.crt
+        read_only: true
+
+  go-client:
+    <<: *go-client
+    volumes:
+      - go-state:/etc/certs
+      - type: bind
+        source: ./.runtime/root_ca.crt
+        target: /etc/certs/prekit-ca.crt
+        read_only: true
+    networks:
+      default:
+        aliases:
+          - franztls-client
+
+  go-from-python:
+    <<: *go-client
+    volumes:
+      - python-state:/etc/certs
+      - type: bind
+        source: ./.runtime/root_ca.crt
+        target: /etc/certs/prekit-ca.crt
+        read_only: true
+    networks:
+      default:
+        aliases:
+          - franztls-client
+
+  python-client:
+    <<: *python-client
+    volumes:
+      - go-state:/etc/certs
+      - type: bind
+        source: ./.runtime/root_ca.crt
+        target: /etc/certs/prekit-ca.crt
+        read_only: true
+    networks:
+      default:
+        aliases:
+          - franztls-client
+
+  python-first:
+    <<: *python-client
+    volumes:
+      - python-state:/etc/certs
+      - type: bind
+        source: ./.runtime/root_ca.crt
+        target: /etc/certs/prekit-ca.crt
+        read_only: true
+    networks:
+      default:
+        aliases:
+          - franztls-client
+
+volumes:
+  ca-state:
+  go-state:
+  python-state:
+
+networks:
+  default:
+    internal: true

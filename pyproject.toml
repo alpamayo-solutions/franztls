@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "franztls"
-version = "0.1.5"
+version = "0.2.0"
 description = "Lightweight, open-source ACME client for automating TLS certificate issuance and renewal."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,5 +34,6 @@ where = ["src"]
 [project.optional-dependencies]
 dev = [
   "build>=1.2.1",
+  "pytest>=8,<9",
   "twine>=5.0.0",
 ]
