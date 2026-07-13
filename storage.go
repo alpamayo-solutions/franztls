@@ -19,11 +19,18 @@ import (
 )
 
 var (
-	errUnsafeStatePath = errors.New("franztls: unsafe state path")
-	errNotRegularFile  = errors.New("franztls: state path is not a regular file")
-	errWrongMode       = errors.New("franztls: state path has unexpected permissions")
-	errAccountState    = errors.New("franztls: inconsistent account state")
+	errUnsafeStatePath   = errors.New("franztls: unsafe state path")
+	errNotRegularFile    = errors.New("franztls: state path is not a regular file")
+	errWrongMode         = errors.New("franztls: state path has unexpected permissions")
+	errAccountState      = errors.New("franztls: inconsistent account state")
+	errStateFileTooLarge = errors.New("franztls: state file exceeds size limit")
 )
+
+// maxStateFileSize bounds every descriptor-relative state read. Certificate,
+// key, CA, and account files are all small; a generous cap keeps corrupt or
+// hostile files from causing unbounded allocations while preserving normal
+// interoperability.
+const maxStateFileSize = 4 << 20
 
 // DurabilityUncertainError means rename completed but syncing the containing
 // directory failed. Callers must re-read and validate disk state before

@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"os"
 	"testing"
 	"time"
 )
@@ -57,6 +58,7 @@ type testMaterial struct {
 	leaf             *x509.Certificate
 	leafKey          crypto.Signer
 	leafOptions      testLeafOptions
+	root             *testIssuer
 	issuer           *testIssuer
 	withIntermediate bool
 }
@@ -81,10 +83,11 @@ func newTestMaterial(
 	leafKey := newTestSigner(t, algorithm)
 	material := &testMaterial{
 		t:                t,
-		cfg:              validConfig(t.TempDir()),
+		cfg:              validConfig(storageTempDir(t)),
 		now:              now,
 		roots:            x509.NewCertPool(),
 		leafKey:          leafKey,
+		root:             root,
 		issuer:           issuer,
 		withIntermediate: withIntermediate,
 		intermediateDER:  intermediate.der,
@@ -100,6 +103,24 @@ func newTestMaterial(
 	material.privateKeyPEM = encodeTestPrivateKey(t, leafKey, encoding)
 	material.reissueLeaf(material.leafOptions)
 	return material
+}
+
+func writeTestMaterialFiles(t *testing.T, cfg Config, material *testMaterial) {
+	t.Helper()
+	caPEM := encodeTestCertificateChain(t, material.root.der)
+	for _, file := range []struct {
+		path string
+		data []byte
+		mode os.FileMode
+	}{
+		{path: cfg.CACertFile, data: caPEM, mode: 0o644},
+		{path: cfg.PrivateKeyFile, data: material.privateKeyPEM, mode: 0o600},
+		{path: cfg.CertificateFile, data: material.certificatePEM, mode: 0o644},
+	} {
+		if err := os.WriteFile(file.path, file.data, file.mode); err != nil {
+			t.Fatalf("write test material %s: %v", file.path, err)
+		}
+	}
 }
 
 func newTestRoot(t *testing.T, commonName string, now time.Time) *testIssuer {

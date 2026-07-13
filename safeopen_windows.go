@@ -243,9 +243,12 @@ func (d *platformDir) readFile(name string) ([]byte, fs.FileMode, error) {
 	}
 	file := os.NewFile(uintptr(handle), filepath.Join(d.path, name))
 	defer file.Close()
-	data, err := io.ReadAll(file)
+	data, err := io.ReadAll(io.LimitReader(file, maxStateFileSize+1))
 	if err != nil {
 		return nil, 0, err
+	}
+	if len(data) > maxStateFileSize {
+		return nil, 0, errStateFileTooLarge
 	}
 	// Windows ACLs, not POSIX mode bits, control access. A zero portable mode
 	// tells common code that the no-follow/type checks succeeded but there is no

@@ -164,9 +164,12 @@ func (d *platformDir) readFile(name string) ([]byte, fs.FileMode, error) {
 	if !info.Mode().IsRegular() {
 		return nil, 0, errNotRegularFile
 	}
-	data, err := io.ReadAll(file)
+	data, err := io.ReadAll(io.LimitReader(file, maxStateFileSize+1))
 	if err != nil {
 		return nil, 0, err
+	}
+	if len(data) > maxStateFileSize {
+		return nil, 0, errStateFileTooLarge
 	}
 	return data, info.Mode().Perm(), nil
 }
