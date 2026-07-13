@@ -177,6 +177,11 @@ start_ca() {
 
 copy_root_ca() {
     "${COMPOSE[@]}" cp ca:/home/step/certs/root_ca.crt "${RUNTIME_DIR}/root_ca.crt"
+    # Native Linux checks file ownership before read-only-mount state. Match
+    # the runtime identity so a write attempt proves EROFS instead of EACCES.
+    "${COMPOSE[@]}" run -T --rm --no-deps \
+        --user 0:0 --entrypoint /bin/chown server-cert \
+        65532:65532 /runtime/root_ca.crt
     chmod 0644 "${RUNTIME_DIR}/root_ca.crt"
     if [[ ! -s "${RUNTIME_DIR}/root_ca.crt" ]] ||
         ! grep -q -- '-----BEGIN CERTIFICATE-----' "${RUNTIME_DIR}/root_ca.crt"; then
