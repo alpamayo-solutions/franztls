@@ -6,10 +6,15 @@ cd "${REPOSITORY_ROOT}"
 
 COMPOSE=(docker compose -f integration/compose.yaml)
 RUNTIME_DIR="integration/.runtime"
+COMPOSE_LOG_FILE="${FRANZTLS_COMPOSE_LOG_FILE:-}"
 
 cleanup() {
     local status=$?
     trap - EXIT
+    if [[ "${status}" -ne 0 && -n "${COMPOSE_LOG_FILE}" ]]; then
+        "${COMPOSE[@]}" logs --no-color >"${COMPOSE_LOG_FILE}" 2>&1 || true
+        chmod 0600 "${COMPOSE_LOG_FILE}" 2>/dev/null || true
+    fi
     "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
     rm -rf -- "${RUNTIME_DIR}"
     exit "${status}"
