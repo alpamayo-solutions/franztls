@@ -93,6 +93,9 @@ type legoIssuer struct {
 	operations     legoOperations
 	provider       managedHTTP01Provider
 	recoverAccount bool
+
+	closeMu sync.Mutex
+	closed  bool
 }
 
 func newLegoIssuer(
@@ -282,8 +285,8 @@ func (i *legoIssuer) Obtain(ctx context.Context, domainKey crypto.Signer) (chain
 		ctx = context.Background()
 	}
 	defer func() {
-		if closeErr := i.Close(ctx); closeErr != nil && err == nil {
-			err = closeErr
+		if closeErr := i.Close(context.WithoutCancel(ctx)); closeErr != nil {
+			err = errors.Join(err, closeErr)
 			chain = nil
 		}
 	}()
@@ -326,6 +329,13 @@ func (i *legoIssuer) Close(ctx context.Context) error {
 	if i == nil || i.provider == nil {
 		return nil
 	}
+	i.closeMu.Lock()
+	defer i.closeMu.Unlock()
+	if i.closed {
+		return nil
+	}
+	i.closed = true
+
 	if ctx == nil {
 		ctx = context.Background()
 	}

@@ -366,20 +366,57 @@ func (s *stateStore) persistMaterial(
 	roots *x509.CertPool,
 	now time.Time,
 ) (*certificateMaterial, error) {
+	return s.persistIssuedMaterial(
+		certificatePEM,
+		signer,
+		nil,
+		true,
+		roots,
+		now,
+	)
+}
+
+func (s *stateStore) persistIssuedMaterial(
+	certificatePEM []byte,
+	signer crypto.Signer,
+	privateKeyPEM []byte,
+	persistPrivateKey bool,
+	roots *x509.CertPool,
+	now time.Time,
+) (*certificateMaterial, error) {
 	// Validate the complete candidate before creating a directory or replacing
-	// any usable on-disk state.
+	// any usable on-disk domain state.
 	material, err := validateMaterial(certificatePEM, signer, roots, s.cfg, now)
 	if err != nil {
 		return nil, err
 	}
-	privateKeyPEM, err := marshalSignerPEM(signer)
-	if err != nil {
-		return nil, &StateError{Path: s.cfg.PrivateKeyFile, Kind: "private_key", Err: err}
+	if persistPrivateKey {
+		if len(privateKeyPEM) == 0 {
+			privateKeyPEM, err = marshalSignerPEM(signer)
+			if err != nil {
+				return nil, &StateError{
+					Path: s.cfg.PrivateKeyFile,
+					Kind: "private_key",
+					Err:  err,
+				}
+			}
+		}
+		if err := s.writeFile(
+			s.cfg.PrivateKeyFile,
+			privateKeyPEM,
+			0o600,
+			"private_key",
+		); err != nil {
+			return nil, err
+		}
 	}
-	if err := s.writeFile(s.cfg.PrivateKeyFile, privateKeyPEM, 0o600, "private_key"); err != nil {
-		return nil, err
-	}
-	if err := s.writeFile(s.cfg.CertificateFile, certificatePEM, 0o644, "certificate"); err != nil {
+	// The certificate is the commit marker and is therefore always written last.
+	if err := s.writeFile(
+		s.cfg.CertificateFile,
+		certificatePEM,
+		0o644,
+		"certificate",
+	); err != nil {
 		return nil, err
 	}
 	return material, nil

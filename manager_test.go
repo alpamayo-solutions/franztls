@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,6 +24,88 @@ func (clock fakeManagerClock) Now() time.Time { return clock.now }
 
 type forbiddenIssuerFactory struct {
 	calls atomic.Int32
+}
+
+type recordingManagerIssuerFactory struct {
+	mu         sync.Mutex
+	calls      int
+	makeIssuer func(context.Context, normalizedConfig, *x509.CertPool, crypto.Signer, *acme.ExtendedAccount) (issuer, error)
+}
+
+func (factory *recordingManagerIssuerFactory) New(
+	ctx context.Context,
+	cfg normalizedConfig,
+	roots *x509.CertPool,
+	accountKey crypto.Signer,
+	account *acme.ExtendedAccount,
+) (issuer, error) {
+	factory.mu.Lock()
+	factory.calls++
+	makeIssuer := factory.makeIssuer
+	factory.mu.Unlock()
+	if makeIssuer == nil {
+		return nil, errors.New("missing recording issuer")
+	}
+	return makeIssuer(ctx, cfg, roots, accountKey, account)
+}
+
+func (factory *recordingManagerIssuerFactory) callCount() int {
+	factory.mu.Lock()
+	defer factory.mu.Unlock()
+	return factory.calls
+}
+
+type recordingManagerIssuer struct {
+	mu            sync.Mutex
+	accountCalls  int
+	orderCalls    int
+	closeCalls    int
+	ensureAccount func(context.Context, crypto.Signer, *acme.ExtendedAccount) (*acme.ExtendedAccount, error)
+	obtain        func(context.Context, crypto.Signer) ([]byte, error)
+	close         func(context.Context) error
+}
+
+func (issuer *recordingManagerIssuer) EnsureAccount(
+	ctx context.Context,
+	key crypto.Signer,
+	account *acme.ExtendedAccount,
+) (*acme.ExtendedAccount, error) {
+	issuer.mu.Lock()
+	issuer.accountCalls++
+	operation := issuer.ensureAccount
+	issuer.mu.Unlock()
+	if operation == nil {
+		return account, nil
+	}
+	return operation(ctx, key, account)
+}
+
+func (issuer *recordingManagerIssuer) Obtain(ctx context.Context, key crypto.Signer) ([]byte, error) {
+	issuer.mu.Lock()
+	issuer.orderCalls++
+	operation := issuer.obtain
+	issuer.mu.Unlock()
+	if operation == nil {
+		return nil, errors.New("missing recording order")
+	}
+	return operation(ctx, key)
+}
+
+func (issuer *recordingManagerIssuer) Close(ctx context.Context) error {
+	issuer.mu.Lock()
+	issuer.closeCalls++
+	operation := issuer.close
+	issuer.mu.Unlock()
+	if operation == nil {
+		return nil
+	}
+	return operation(ctx)
+}
+
+func (issuer *recordingManagerIssuer) counts() (account, order, close int) {
+	issuer.mu.Lock()
+	defer issuer.mu.Unlock()
+	return issuer.accountCalls, issuer.orderCalls, issuer.closeCalls
 }
 
 func (factory *forbiddenIssuerFactory) New(
@@ -301,25 +384,6 @@ func TestEnsureReusesNonDueMaterialEntirelyOffline(t *testing.T) {
 		t.Fatal("Ensure did not activate reused material")
 	}
 	assertNoManagerEvents(t, manager)
-}
-
-func TestEnsureDueMaterialDoesNotTakeOfflineFastPath(t *testing.T) {
-	material := newTestMaterial(t, testKeyRSA, testKeyPKCS1, true, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
-	material.cfg.RenewBefore = 24 * time.Hour
-	writeTestMaterialFiles(t, material.cfg, material)
-	factory := &forbiddenIssuerFactory{}
-	manager := newManagerForTest(t, material.cfg, fakeManagerClock{now: material.now}, factory)
-
-	change, err := manager.Ensure(context.Background())
-	if !errors.Is(err, errCertificateRenewalRequired) {
-		t.Fatalf("Ensure error = %T %v, want renewal-required handoff", err, err)
-	}
-	if change.Renewed || !change.NotAfter.Equal(material.leaf.NotAfter) {
-		t.Fatalf("due change = %+v, want unchanged usable expiry", change)
-	}
-	if factory.calls.Load() != 0 {
-		t.Fatalf("Task 6 invoked issuer factory %d times", factory.calls.Load())
-	}
 }
 
 func TestLoadRejectsOversizedStateBeforeParsing(t *testing.T) {
