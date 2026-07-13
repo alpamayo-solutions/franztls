@@ -152,6 +152,9 @@ class CertManager:
 
     def _start_http_challenge_server(self) -> None:
         class ChallengeHandler(BaseHTTPRequestHandler):
+            def log_message(inner_self, _format, *_args):
+                return
+
             def do_GET(inner_self):
                 token = inner_self.path.split("/")[-1]
                 if token in self.challenge_responses:
@@ -208,7 +211,7 @@ class CertManager:
                 response, validation = chall.response_and_validation(self.jwkey)
                 self.challenge_responses[token] = validation
 
-                logger.info(f"🧪 Starting challenge validation for {authz.body.identifier} and token {token}")
+                logger.info(f"🧪 Starting challenge validation for {authz.body.identifier}")
                 self.acme.answer_challenge(chall, response)
 
                 for _ in range(30):
