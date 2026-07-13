@@ -52,10 +52,14 @@ type Manager struct {
 	cfg           normalizedConfig
 	store         *stateStore
 	clock         managerClock
+	runClock      renewalClock
+	runRandom     renewalRandom
 	issuerFactory issuerFactory
 	lock          issueLock
 
 	mu            sync.Mutex
+	eventMu       sync.Mutex
+	runActive     atomic.Bool
 	current       atomic.Pointer[activeMaterial]
 	cachedRoots   *x509.CertPool
 	publishChange func(CertificateChange)
@@ -78,6 +82,8 @@ func newManager(cfg normalizedConfig, clock managerClock, factory issuerFactory)
 		cfg:           cfg,
 		store:         newStateStore(cfg),
 		clock:         clock,
+		runClock:      runtimeRenewalClock{},
+		runRandom:     runtimeRenewalRandom{},
 		issuerFactory: factory,
 		lock:          newIssueLock(cfg),
 		changes:       make(chan CertificateChange, 1),
@@ -457,10 +463,15 @@ func (m *Manager) loadRoots(ctx context.Context) (*x509.CertPool, error) {
 }
 
 func (m *Manager) enqueueChange(change CertificateChange) {
-	select {
-	case m.changes <- change:
-	default:
-	}
+	m.eventMu.Lock()
+	defer m.eventMu.Unlock()
+	publishLatest(m.changes, change)
+}
+
+func (m *Manager) enqueueError(err error) {
+	m.eventMu.Lock()
+	defer m.eventMu.Unlock()
+	publishLatest(m.errors, err)
 }
 
 // Changes reports committed certificate activations without blocking the manager.

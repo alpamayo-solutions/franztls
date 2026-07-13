@@ -9,6 +9,7 @@ import (
 var (
 	ErrNotLoaded              = errors.New("franztls: certificate is not loaded")
 	ErrNoUsableCertificate    = errors.New("franztls: no usable certificate")
+	ErrRenewalAlreadyRunning  = errors.New("franztls: certificate renewal loop is already running")
 	ErrExternalAccountBinding = errors.New("franztls: ACME server requires unsupported external account binding")
 )
 
