@@ -3,6 +3,7 @@ package franztls
 import (
 	"context"
 	"path/filepath"
+	"time"
 )
 
 const (
@@ -15,14 +16,19 @@ type issueLock interface {
 }
 
 type fileIssueLock struct {
-	stateRoot string
-	path      string
+	stateRoot                string
+	name                     string
+	path                     string
+	pollInterval             time.Duration
+	afterDescriptorValidated func()
+	onContention             func()
 }
 
 func newIssueLock(cfg normalizedConfig) issueLock {
 	stateRoot := filepath.Dir(cfg.AccountKeyFile)
 	return &fileIssueLock{
 		stateRoot: stateRoot,
+		name:      issueLockFileName,
 		path:      filepath.Join(stateRoot, issueLockFileName),
 	}
 }
@@ -34,9 +40,24 @@ func (lock *fileIssueLock) Acquire(ctx context.Context) (func() error, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	release, err := acquirePlatformIssueLock(ctx, lock.stateRoot, issueLockFileName)
+	name := lock.name
+	if name == "" {
+		name = issueLockFileName
+	}
+	path := lock.path
+	if path == "" {
+		path = filepath.Join(lock.stateRoot, name)
+	}
+	release, err := acquirePlatformIssueLock(
+		ctx,
+		lock.stateRoot,
+		name,
+		lock.pollInterval,
+		lock.afterDescriptorValidated,
+		lock.onContention,
+	)
 	if err != nil {
-		return nil, wrapStorageError(lock.path, "lock", err)
+		return nil, wrapStorageError(path, "lock", err)
 	}
 	return release, nil
 }

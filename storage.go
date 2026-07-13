@@ -13,6 +13,7 @@ import (
 	"io"
 	"io/fs"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-acme/lego/v5/acme"
@@ -30,7 +31,11 @@ var (
 // key, CA, and account files are all small; a generous cap keeps corrupt or
 // hostile files from causing unbounded allocations while preserving normal
 // interoperability.
-const maxStateFileSize = 4 << 20
+const (
+	maxStateFileSize        = 4 << 20
+	stateTemporaryPrefix    = ".franztls-"
+	stateTemporaryHexLength = 24
+)
 
 // DurabilityUncertainError means rename completed but syncing the containing
 // directory failed. Callers must re-read and validate disk state before
@@ -84,7 +89,7 @@ type atomicDirectory interface {
 }
 
 func atomicWrite(directory atomicDirectory, name string, data []byte, mode fs.FileMode) error {
-	file, temporaryName, err := directory.createTemp(".franztls-")
+	file, temporaryName, err := directory.createTemp(stateTemporaryPrefix)
 	if err != nil {
 		return err
 	}
@@ -192,6 +197,44 @@ func (d *stateDir) readFile(name string) ([]byte, fs.FileMode, error) {
 	return d.platform.readFile(name)
 }
 
+func (d *stateDir) cleanupStaleTemporaryFiles() error {
+	names, err := d.platform.readDirNames()
+	if err != nil {
+		return err
+	}
+	var cleanupErr error
+	removed := false
+	for _, name := range names {
+		if !isStateTemporaryName(name) {
+			continue
+		}
+		if err := d.remove(name); err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+			continue
+		}
+		removed = true
+	}
+	if removed {
+		cleanupErr = errors.Join(cleanupErr, d.sync())
+	}
+	return cleanupErr
+}
+
+func isStateTemporaryName(name string) bool {
+	if len(name) != len(stateTemporaryPrefix)+stateTemporaryHexLength ||
+		!strings.HasPrefix(name, stateTemporaryPrefix) {
+		return false
+	}
+	for index := len(stateTemporaryPrefix); index < len(name); index++ {
+		character := name[index]
+		if (character < '0' || character > '9') &&
+			(character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func safeBaseName(name string) bool {
 	return name != "" && name != "." && name != ".." && filepath.Base(name) == name
 }
@@ -291,6 +334,25 @@ func (s *stateStore) persistAccount(account *acme.ExtendedAccount) error {
 		return &StateError{Path: s.cfg.AccountFile, Kind: "account", Err: err}
 	}
 	return s.writeFile(s.cfg.AccountFile, encoded, 0o600, "account")
+}
+
+func (s *stateStore) cleanupStaleTemporaryFiles() (err error) {
+	directory, err := openStateDir(s.stateRoot, false)
+	if err != nil {
+		return wrapStorageError(s.stateRoot, "temporary_cleanup", err)
+	}
+	defer func() {
+		if closeErr := directory.close(); closeErr != nil {
+			err = errors.Join(
+				err,
+				wrapStorageError(s.stateRoot, "temporary_cleanup", closeErr),
+			)
+		}
+	}()
+	if err := directory.cleanupStaleTemporaryFiles(); err != nil {
+		return wrapStorageError(s.stateRoot, "temporary_cleanup", err)
+	}
+	return nil
 }
 
 func (s *stateStore) writeFile(path string, data []byte, mode fs.FileMode, kind string) error {

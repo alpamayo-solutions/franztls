@@ -16,6 +16,9 @@ func acquirePlatformIssueLock(
 	ctx context.Context,
 	stateRoot string,
 	name string,
+	pollInterval time.Duration,
+	afterDescriptorValidated func(),
+	onContention func(),
 ) (func() error, error) {
 	directory, err := openStateDir(stateRoot, true)
 	if err != nil {
@@ -43,6 +46,12 @@ func acquirePlatformIssueLock(
 	if err := directory.sync(); err != nil {
 		return fail(err)
 	}
+	if afterDescriptorValidated != nil {
+		afterDescriptorValidated()
+	}
+	if pollInterval <= 0 {
+		pollInterval = issueLockPollInterval
+	}
 
 	var overlapped windows.Overlapped
 	for {
@@ -69,7 +78,10 @@ func acquirePlatformIssueLock(
 		if !errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
 			return fail(err)
 		}
-		timer := time.NewTimer(issueLockPollInterval)
+		if onContention != nil {
+			onContention()
+		}
+		timer := time.NewTimer(pollInterval)
 		select {
 		case <-ctx.Done():
 			if !timer.Stop() {

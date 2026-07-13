@@ -17,6 +17,10 @@ func (d *platformDir) createTemp(string) (atomicFile, string, error) {
 	return nil, "", &UnsupportedSafeOpenError{GOOS: runtime.GOOS}
 }
 
+func (d *platformDir) readDirNames() ([]string, error) {
+	return nil, &UnsupportedSafeOpenError{GOOS: runtime.GOOS}
+}
+
 func (d *platformDir) remove(string) error {
 	return &UnsupportedSafeOpenError{GOOS: runtime.GOOS}
 }

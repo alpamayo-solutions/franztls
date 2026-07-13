@@ -17,6 +17,9 @@ func acquirePlatformIssueLock(
 	ctx context.Context,
 	stateRoot string,
 	name string,
+	pollInterval time.Duration,
+	afterDescriptorValidated func(),
+	onContention func(),
 ) (func() error, error) {
 	directory, err := openStateDir(stateRoot, true)
 	if err != nil {
@@ -57,6 +60,12 @@ func acquirePlatformIssueLock(
 			return fail(err)
 		}
 	}
+	if afterDescriptorValidated != nil {
+		afterDescriptorValidated()
+	}
+	if pollInterval <= 0 {
+		pollInterval = issueLockPollInterval
+	}
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -72,7 +81,10 @@ func acquirePlatformIssueLock(
 			}
 			break
 		}
-		timer := time.NewTimer(issueLockPollInterval)
+		if onContention != nil {
+			onContention()
+		}
+		timer := time.NewTimer(pollInterval)
 		select {
 		case <-ctx.Done():
 			if !timer.Stop() {

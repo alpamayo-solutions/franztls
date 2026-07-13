@@ -136,15 +136,21 @@ func (m *Manager) Ensure(ctx context.Context) (change CertificateChange, err err
 	}
 
 	release, acquireErr := m.lock.Acquire(ctx)
-	// Lock acquisition may have waited behind another complete issuance. All
-	// due checks, validation, and fallback decisions below use fresh time.
-	now = m.clock.Now()
 	if acquireErr != nil {
 		return m.failureResult(acquireErr)
 	}
 	defer func() {
 		err = errors.Join(err, release())
 	}()
+	if err := ctx.Err(); err != nil {
+		return m.failureResult(err)
+	}
+	if cleanupErr := m.store.cleanupStaleTemporaryFiles(); cleanupErr != nil {
+		return m.failureResult(cleanupErr)
+	}
+	// Lock acquisition and recovery may have waited behind another complete
+	// issuance. All due checks below use fresh time.
+	now = m.clock.Now()
 
 	return m.ensureLocked(ctx, now)
 }

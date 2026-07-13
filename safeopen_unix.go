@@ -110,6 +110,29 @@ func (d *platformDir) createTemp(prefix string) (atomicFile, string, error) {
 	return nil, "", errors.New("franztls: could not create unique temporary state file")
 }
 
+func (d *platformDir) readDirNames() ([]string, error) {
+	fd, err := unix.Openat(
+		d.fd,
+		".",
+		unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC,
+		0,
+	)
+	if err != nil {
+		return nil, classifyUnixPathError(err)
+	}
+	directory := os.NewFile(uintptr(fd), d.path)
+	entries, readErr := directory.ReadDir(-1)
+	closeErr := directory.Close()
+	if err := errors.Join(readErr, closeErr); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names, nil
+}
+
 func (d *platformDir) remove(name string) error {
 	if !safeBaseName(name) {
 		return errUnsafeStatePath

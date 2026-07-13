@@ -159,6 +159,33 @@ func (d *platformDir) createTemp(prefix string) (atomicFile, string, error) {
 	return nil, "", errors.New("franztls: could not create unique temporary state file")
 }
 
+func (d *platformDir) readDirNames() ([]string, error) {
+	var duplicate windows.Handle
+	process := windows.CurrentProcess()
+	if err := windows.DuplicateHandle(
+		process,
+		d.handle,
+		process,
+		&duplicate,
+		0,
+		false,
+		windows.DUPLICATE_SAME_ACCESS,
+	); err != nil {
+		return nil, err
+	}
+	directory := os.NewFile(uintptr(duplicate), d.path)
+	entries, readErr := directory.ReadDir(-1)
+	closeErr := directory.Close()
+	if err := errors.Join(readErr, closeErr); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names, nil
+}
+
 func (d *platformDir) remove(name string) error {
 	handle, err := d.openFile(name, windows.DELETE|windows.SYNCHRONIZE)
 	if err == windows.STATUS_OBJECT_NAME_NOT_FOUND {
