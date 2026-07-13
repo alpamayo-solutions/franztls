@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	franztls "github.com/alpamayo-solutions/franztls"
+	legolog "github.com/go-acme/lego/v5/log"
 )
 
 const (
@@ -114,6 +116,7 @@ func runCommand(
 	stderr io.Writer,
 	dependencies commandDependencies,
 ) int {
+	legolog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if len(args) == 0 {
 		return argumentFailure(stderr, "command")
 	}

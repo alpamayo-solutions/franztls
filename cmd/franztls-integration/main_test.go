@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	franztls "github.com/alpamayo-solutions/franztls"
+	legolog "github.com/go-acme/lego/v5/log"
 )
 
 const testSecret = "task12-private-key-token-secret"
@@ -177,6 +179,33 @@ func TestCertificateCommandsEmitOnlyLeafSerialAndExpiryJSON(t *testing.T) {
 				t.Fatalf("stdout = %q, want exactly one JSON line", stdout.String())
 			}
 		})
+	}
+}
+
+func TestCertificateCommandSuppressesDependencyLogsFromStdout(t *testing.T) {
+	originalLogger := legolog.Default()
+	defer legolog.SetDefault(originalLogger)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	legolog.SetDefault(slog.New(slog.NewTextHandler(&stdout, nil)))
+	manager := &fakeManager{
+		ensureChange: franztls.CertificateChange{Renewed: true},
+	}
+	dependencies := testDependencies(manager)
+	dependencies.newManager = func(franztls.Config) (managerAPI, error) {
+		legolog.Info("task12 dependency log must stay out of machine output")
+		return manager, nil
+	}
+
+	code := runCommand(context.Background(), []string{"issue"}, &stdout, &stderr, dependencies)
+
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	want := "{\"serial\":\"123456789\",\"expiry\":\"2030-01-02T03:04:05Z\"}\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout = %q, want exactly %q", stdout.String(), want)
 	}
 }
 
